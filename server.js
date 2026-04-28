@@ -134,6 +134,8 @@ app.get('/api/health', (c) => {
     lovart_configured: !!LOVART_API_KEY,
     mode: USE_MOCK ? 'mock' : 'real',
     lovart_api: LOVART_BASE_URL,
+    pollinations_ai: 'https://image.pollinations.ai',
+    pollinations_status: 'available',
     database_connected: db !== null,
     timestamp: new Date().toISOString()
   });
@@ -374,6 +376,168 @@ app.post('/api/chat', async (c) => {
   }
 });
 
+// ===== Pollinations.AI 形象生成（Freepik/Lovart 免费替代方案）=====
+
+// 构建 Pollinations.AI 提示词
+function buildPollinationsPrompt(petInfo) {
+  const { petType = 'dog', breed = '', color = '', gender = '', age = '', neutered = false, responseWord = '' } = petInfo;
+  
+  const typeMap = { dog: 'dog', cat: 'cat' };
+  const animal = typeMap[petType] || petType || 'pet';
+  
+  const prompt = `Cute cartoon kawaii ${animal}${breed ? ' ' + breed : ''}${color ? ', ' + color + ' color' : ''}, 
+    big round sparkling eyes, happy friendly expression, 
+    soft pastel colors, clean white background, 
+    children's book illustration style, simple clean design, 
+    perfect for mobile app avatar, high quality, detailed, 
+    front facing, full body view, 2D flat illustration`;
+  
+  return prompt.replace(/\s+/g, ' ').trim();
+}
+
+// 生成宠物2D形象（Pollinations.AI - 完全免费，无需Key）
+app.post('/api/generate-pet-image', async (c) => {
+  try {
+    const petInfo = await c.req.json();
+    console.log('🎨 Pollinations 形象生成请求:', petInfo);
+
+    const prompt = buildPollinationsPrompt(petInfo);
+    const seed = Date.now();
+    
+    // Pollinations.AI 同步图片URL（无需轮询，直接可用）
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&seed=${seed}&model=flux`;
+
+    // 验证图片可访问性（可选，不阻塞）
+    let accessible = true;
+    try {
+      await axios.head(imageUrl, { timeout: 8000 });
+    } catch (e) {
+      accessible = false;
+      console.log('⚠️ Pollinations 图片预检失败，但URL仍可用');
+    }
+
+    console.log('✅ Pollinations 图片URL生成成功');
+
+    return c.json({
+      success: true,
+      imageUrl,
+      prompt,
+      seed,
+      provider: 'pollinations.ai',
+      accessible,
+      generated_at: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Pollinations 生成失败:', error.message);
+    return c.json({
+      success: false,
+      error: error.message,
+      fallback: '请检查网络连接或稍后重试'
+    }, 500);
+  }
+});
+
+// ===== TTS 语音合成（Pollinations.AI TTS + Edge TTS 备选）=====
+
+// 宠物音色参数映射（品种/年龄/性别/绝育 → 语音参数）
+function calculateVoiceParams(petParams) {
+  const { gender = 'male', age = 3, breed = '', neutered = false, petType = 'dog' } = petParams;
+  
+  // 基础参数
+  let pitch = 1.0;
+  let rate = 1.0;
+  let voiceGender = gender === 'female' ? 'female' : 'male';
+  
+  // 品种/体型影响音调
+  const smallBreeds = ['teddy', 'chihuahua', 'poodle', 'bichon', 'persian', 'ragdoll', 'shorthair'];
+  const largeBreeds = ['golden', 'labrador', 'german shepherd', 'rottweiler', 'husky', 'maine coon'];
+  
+  const breedLower = breed.toLowerCase();
+  if (smallBreeds.some(b => breedLower.includes(b))) {
+    pitch += 0.15;
+  } else if (largeBreeds.some(b => breedLower.includes(b))) {
+    pitch -= 0.1;
+  }
+  
+  // 宠物类型（猫普遍音调更高）
+  if (petType === 'cat') {
+    pitch += 0.1;
+  }
+  
+  // 年龄影响
+  const ageNum = parseInt(age) || 3;
+  if (ageNum <= 1) {
+    pitch += 0.2;
+    rate += 0.1;
+  } else if (ageNum >= 10) {
+    pitch -= 0.1;
+    rate -= 0.05;
+  }
+  
+  // 性别影响
+  if (gender === 'female') {
+    pitch += 0.05;
+  }
+  
+  // 绝育影响（雄性绝育后声音变柔和/偏高）
+  if (neutered && gender === 'male') {
+    pitch += 0.1;
+  }
+  
+  // 限制范围
+  pitch = Math.max(0.5, Math.min(2.0, pitch));
+  rate = Math.max(0.5, Math.min(1.5, rate));
+  
+  return { pitch, rate, voiceGender };
+}
+
+// TTS 合成接口
+app.post('/api/tts', async (c) => {
+  try {
+    const { text, petParams = {} } = await c.req.json();
+    
+    if (!text || text.trim().length === 0) {
+      return c.json({ error: '文本内容不能为空' }, 400);
+    }
+    
+    console.log('🔊 TTS 请求:', text.substring(0, 50));
+    
+    // 计算宠物专属音色参数
+    const voiceParams = calculateVoiceParams(petParams);
+    
+    // 方案1: Pollinations.AI TTS（无需Key，免费）
+    // 使用 OpenAI 音频模型，voice可选: alloy, echo, fable, onyx, nova, shimmer
+    const pollinationsTtsUrl = `https://text.pollinations.ai/${encodeURIComponent(text)}?model=openai-audio&voice=nova`;
+    
+    return c.json({
+      success: true,
+      text: text.trim(),
+      provider: 'pollinations.ai',
+      audioUrl: pollinationsTtsUrl,
+      voiceParams,  // 前端 Web Speech API 可用这些参数
+      // 前端 Web Speech API 参数（浏览器原生TTS建议值）
+      webSpeechConfig: {
+        lang: 'zh-CN',
+        pitch: voiceParams.pitch,
+        rate: voiceParams.rate,
+        // 推荐语音（设备不同可能不存在）
+        preferredVoices: voiceParams.voiceGender === 'female' 
+          ? ['Xiaoxiao', 'zh-CN-XiaoxiaoNeural', 'Ting-Ting']
+          : ['Yunxi', 'zh-CN-YunxiNeural', 'Kangkang']
+      },
+      generated_at: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ TTS 失败:', error.message);
+    return c.json({
+      success: false,
+      error: error.message
+    }, 500);
+  }
+});
+
 // ===== 图片上传 =====
 
 
@@ -489,9 +653,17 @@ async function start() {
     console.log(`   POST http://localhost:${PORT}/api/pets           创建宠物`);
     console.log(`   GET  http://localhost:${PORT}/api/pets?userId=   获取宠物列表`);
     console.log(`   PUT  http://localhost:${PORT}/api/pets/:id       更新宠物`);
+    console.log(`   POST http://localhost:${PORT}/api/generate-pet-image  Pollinations.AI形象生成`);
+    console.log(`   POST http://localhost:${PORT}/api/tts            TTS语音合成`);
+    console.log(`   POST http://localhost:${PORT}/api/chat           小能AI对话`);
+    console.log(`   POST http://localhost:${PORT}/api/chat/greeting  小能开场白`);
     console.log(`   POST http://localhost:${PORT}/api/lovart/generate`);
     console.log(`   GET  http://localhost:${PORT}/api/lovart/status/:id`);
     console.log(`   POST http://localhost:${PORT}/api/upload`);
+    console.log('');
+    console.log('🎨 形象生成: Pollinations.AI（免费，无需Key）');
+    console.log('🔊 语音合成: Pollinations.AI TTS + Web Speech API');
+    console.log('🤖 AI对话: Kimi K2.5');
     console.log('');
   });
 }

@@ -122,6 +122,7 @@
 - [x] 失败兜底提示（错误状态UI）
 - [x] 仅支持1种风格（MVP）：kawaii卡通
 - [ ] 每用户每日生成次数限制（待确定具体次数）
+- [x] **备选方案**: Pollinations.AI（完全免费，无需Key）— 详见 `API_ALTERNATIVES.md`
 
 ### 3.4 语音系统
 
