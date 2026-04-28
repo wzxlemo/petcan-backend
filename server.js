@@ -590,7 +590,7 @@ app.get('/uploads/:filename', (c) => {
 });
 
 // ===== 静态文件服务 - 前端文件 =====
-const FRONTEND_DIR = path.join(__dirname, '..', 'pet-app-demo');
+const FRONTEND_DIR = path.join(__dirname, 'public');
 
 app.get('/', (c) => {
   const indexPath = path.join(FRONTEND_DIR, 'index.html');
